@@ -1,0 +1,2 @@
+release: python manage.py collectstatic --noinput && python manage.py migrate && python manage.py createcachetable && python manage.py seed_profiles
+web: gunicorn genderize_project.wsgi --bind 0.0.0.0:$PORT --workers 1 --log-level debug --capture-output
