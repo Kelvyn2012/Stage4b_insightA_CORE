@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "Bash(rsync -a --exclude=venv --exclude=__pycache__ '--exclude=*.pyc' --exclude=.git /Users/aoamacsplace/Documents/HNG/Backend_Repository_Core_System/ /Users/aoamacsplace/Documents/HNG/stage4b_insighta_core/)",
+      "Bash(/Users/aoamacsplace/Documents/HNG/Backend_Repository_Core_System/venv/bin/python manage.py test api users --verbosity=2 --keepdb)",
+      "Bash(git init *)",
+      "Bash(git remote *)",
+      "Bash(git commit -m ' *)"
+    ],
+    "additionalDirectories": [
+      "/Users/aoamacsplace/Documents/HNG/stage4b_insighta_core/api"
+    ]
+  }
+}
