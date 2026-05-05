@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import secrets
+from urllib.parse import urlencode
 
 import httpx
 from django.utils import timezone
@@ -42,8 +43,7 @@ class GitHubOAuthService:
             "code_challenge": code_challenge,
             "code_challenge_method": "S256",
         }
-        qs = "&".join(f"{k}={v}" for k, v in params.items())
-        return f"{self._AUTHORIZE_URL}?{qs}"
+        return f"{self._AUTHORIZE_URL}?{urlencode(params)}"
 
     def exchange_code(self, code: str, code_verifier: str) -> str:
         with httpx.Client(timeout=10.0) as client:

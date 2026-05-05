@@ -1,10 +1,10 @@
 import csv
-from io import StringIO
 
 from django.db import IntegrityError
-from django.http import HttpResponse
+from django.http import StreamingHttpResponse
 from django.utils import timezone
 from rest_framework import status
+from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -12,6 +12,7 @@ from users.permissions import IsActiveUser, IsAdminRole
 
 from .exceptions import ExternalAPIException, InvalidProfileDataException
 from .filters import build_profile_queryset
+from .ingestion import ingest_csv_stream
 from .models import Profile
 from .pagination import ProfilePagination
 from .parser import parse_query
@@ -169,11 +170,18 @@ class ProfileSearchView(APIView):
         return _paginate(request, queryset)
 
 
+class _Echo:
+    """Minimal file-like object whose write() returns the value — enables StreamingHttpResponse."""
+    def write(self, value):
+        return value
+
+
 class ProfileExportView(APIView):
     """
     GET /api/profiles/export?format=csv
 
-    Applies the same filters/sorting as /api/profiles and streams a CSV.
+    Streams filtered profiles as CSV using a generator + queryset.iterator so
+    the full result set is never held in memory.
     """
 
     permission_classes = [IsActiveUser]
@@ -196,6 +204,23 @@ class ProfileExportView(APIView):
         "created_at",
     ]
 
+    def _stream(self, queryset):
+        writer = csv.writer(_Echo())
+        yield writer.writerow(self._FIELDS)
+        for profile in queryset.iterator(chunk_size=500):
+            yield writer.writerow([
+                str(profile.id),
+                profile.name,
+                profile.gender,
+                profile.gender_probability,
+                profile.age,
+                profile.age_group,
+                profile.country_id,
+                profile.country_name,
+                profile.country_probability,
+                profile.created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            ])
+
     def get(self, request):
         fmt = request.query_params.get("format", "csv")
         if fmt != "csv":
@@ -206,26 +231,37 @@ class ProfileExportView(APIView):
         if err:
             return _error(err["message"], err["_status_code"])
 
-        buf = StringIO()
-        writer = csv.writer(buf)
-        writer.writerow(self._FIELDS)
-        for profile in queryset:
-            writer.writerow(
-                [
-                    str(profile.id),
-                    profile.name,
-                    profile.gender,
-                    profile.gender_probability,
-                    profile.age,
-                    profile.age_group,
-                    profile.country_id,
-                    profile.country_name,
-                    profile.country_probability,
-                    profile.created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                ]
-            )
-
         timestamp = timezone.now().strftime("%Y%m%d_%H%M%S")
-        response = HttpResponse(buf.getvalue(), content_type="text/csv")
+        response = StreamingHttpResponse(self._stream(queryset), content_type="text/csv")
         response["Content-Disposition"] = f'attachment; filename="profiles_{timestamp}.csv"'
         return response
+
+
+class ProfileUploadView(APIView):
+    """
+    POST /api/profiles/upload/
+
+    Accepts a CSV file and bulk-inserts profiles. Admin only.
+    Streams the file — never loads it fully into memory.
+    """
+
+    permission_classes = [IsAdminRole]
+    parser_classes = [MultiPartParser]
+
+    _MAX_BYTES = 150 * 1024 * 1024  # 150 MB
+
+    def post(self, request):
+        if "file" not in request.FILES:
+            return _error("No file provided. Send a multipart field named 'file'.", status.HTTP_400_BAD_REQUEST)
+
+        upload = request.FILES["file"]
+
+        content_type = upload.content_type or ""
+        if "csv" not in content_type and not (upload.name or "").endswith(".csv"):
+            return _error("Only CSV files are accepted.", status.HTTP_415_UNSUPPORTED_MEDIA_TYPE)
+
+        if upload.size > self._MAX_BYTES:
+            return _error("File exceeds the 150 MB limit.", status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+
+        result = ingest_csv_stream(upload)
+        return Response(result, status=status.HTTP_200_OK)
